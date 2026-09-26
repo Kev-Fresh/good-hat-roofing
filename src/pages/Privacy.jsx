@@ -11,9 +11,10 @@ const sections = [
   {
     title: 'What happens to it in this demo',
     body: [
-      'Your answers go to our server so the lead can be scored and a reply written. Nothing is saved there.',
+      'Your answers go to our server, which scores the lead, writes the reply, and saves it in a secured database. Only the business owner, signed in with 2-step verification, can see all leads. You can see only the ones you sent, from this browser.',
+      'Demo leads are deleted automatically after 7 days.',
       'To score the lead we use Claude, an AI model made by Anthropic. The AI only sees your job answers, your neighborhood without a house number, and your notes with any phone numbers or emails removed. It never sees your name, phone number, email, or street address.',
-      'So the demo owner dashboard can show your test lead, your own browser keeps a short copy with only the last 4 digits of your phone number. Your email and notes are not kept. That copy deletes itself after 24 hours, and you can clear it any time from the dashboard.',
+      'If the owner gets an email alert about a lead, it includes only a first name and the type of job. Phone numbers, emails and addresses stay in the secured dashboard.',
     ],
   },
   {

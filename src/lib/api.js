@@ -1,13 +1,23 @@
 import business from '../../shared/business.js';
 import { scoreLead, fallbackReply, fallbackSummary } from '../../shared/scoring.js';
+import { ensureSession } from './supabase.js';
 
-// Ask the Netlify function (which asks Claude). If it's unreachable
-// — local `npm run dev`, rate limited, offline — score with the rules here.
+async function authHeaders() {
+  try {
+    const session = await ensureSession();
+    return session ? { Authorization: `Bearer ${session.access_token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
+// Ask the Netlify function (which asks Claude and saves the lead). If it's
+// unreachable — local `npm run dev`, rate limited, offline — score with the rules here.
 export async function qualifyLead(answers) {
   try {
     const res = await fetch('/api/score-lead', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
       body: JSON.stringify(answers),
     });
     if (res.status === 400) {
@@ -25,6 +35,22 @@ export async function qualifyLead(answers) {
       reply: fallbackReply(result, answers, business),
       summary: fallbackSummary(result, answers),
       source: 'rules',
+      saved: false,
     };
+  }
+}
+
+export async function requestSlot(leadId, slot) {
+  if (!leadId) return false;
+  try {
+    const res = await fetch('/api/request-slot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+      body: JSON.stringify({ leadId, slot }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return Boolean(data.ok);
+  } catch {
+    return false;
   }
 }

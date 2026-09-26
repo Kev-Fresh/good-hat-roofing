@@ -14,18 +14,24 @@
 | Prompt injection in notes | Notes are wrapped and marked as data; AI adjustments are capped (±20, max 2) and the rules score can't be overridden. | `score-lead.mjs` |
 | Script injection (XSS) | React escapes all text, AI replies render as plain text, strict Content-Security-Policy blocks outside scripts. | `netlify.toml` |
 | Clickjacking, sniffing, downgrade | `X-Frame-Options`, `frame-ancestors 'none'`, `nosniff`, HSTS, tight `Permissions-Policy`. | `netlify.toml` |
-| Demo data sitting in a browser | Demo stores only the last 4 digits of the phone, no email or notes, auto-deletes after 24 hours, "Clear" button. | `src/lib/leads.js` |
+| Who can see leads | Row-level security in the database: owners see their business's leads only after signing in **with 2-step verification**; demo visitors see only the leads they sent. Browsers can never insert or delete leads. | `supabase/schema.sql` |
+| Secret database key | `SUPABASE_SECRET_KEY` lives only in Netlify and is used only by server functions. The browser gets the public publishable key, which the database rules restrict. | `netlify/lib/db.mjs` |
+| Owner accounts | Created by hand in Supabase (no public sign-up to the dashboard), then 2-step setup is forced on first sign-in. | `src/pages/Login.jsx`, `supabase/add-owner.sql` |
+| Owner alert emails | Sent only for HOT leads (demo policy). Contain first name, job type, score and a dashboard link. No phone, email or address. | `netlify/lib/db.mjs` |
+| Demo data retention | Demo leads are deleted after 7 days (cleanup on every new lead, plus optional hourly job). | `score-lead.mjs`, `supabase/optional-cleanup-cron.sql` |
 | Texting rules | No customer texting in version 1. Customers get the reply on screen and a phone call back. | `Quote.jsx` |
 
 Known limit: free-text notes can still contain names or other details a person chooses to type. They're scrubbed for phone numbers and emails only.
 
 ## Before a real client goes live (client-ready build)
 
-- [ ] **Database with row-level security** (e.g. Supabase). Only the owner's account can read leads. The browser never holds the service key.
-- [ ] **Owner login with 2-factor auth** on the dashboard. No public dashboard URL.
-- [ ] **Save leads only from the server function**, never directly from the browser.
-- [ ] **Owner alerts by email, with no private details.** The email says "New HOT lead: Dana, active leak" plus a dashboard link. No phone numbers or addresses in the alert.
-- [ ] **Retention rule.** Auto-delete or anonymize leads after an agreed period (e.g. 12 months). Delete on request.
+- [x] **Database with row-level security.** Only 2-step-verified members read a business's leads. The browser never holds the secret key.
+- [x] **Owner login with 2-factor auth** on the dashboard.
+- [x] **Save leads only from the server function**, never directly from the browser.
+- [x] **Owner alerts by email, with no private details.**
+- [ ] **Per-client settings:** its own row in `businesses` (retention, alert policy), its own owner accounts, its own sending domain in Resend.
+- [ ] **Retention rule agreed with the client** (e.g. 12 months) set in `retention_days`. Delete on request.
+- [ ] **Turn on CAPTCHA** for anonymous sign-ins in Supabase if the site sees bot traffic.
 - [ ] **Real privacy policy** with the client's business name and a real contact inbox (`privacyContact` in `shared/business.js`).
 - [ ] **Customer texting stays off** unless it's sold as a separate add-on. If added later: attorney-reviewed consent wording, carrier registration, a provider that handles STOP automatically, and a consent timestamp saved with each lead.
 - [ ] **Review the AI provider's data terms** with the client, and set a monthly spend limit on the API key.

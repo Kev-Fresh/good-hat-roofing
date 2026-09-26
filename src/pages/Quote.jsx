@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import business from '../../shared/business.js';
-import { qualifyLead } from '../lib/api.js';
+import { qualifyLead, requestSlot } from '../lib/api.js';
 import { validateLead, formatPhone } from '../../shared/contact.js';
 import { maskPhone } from '../../shared/privacy.js';
 import { saveLead } from '../lib/leads.js';
@@ -97,7 +97,9 @@ export default function Quote() {
       return;
     }
     setResult(res);
-    saveLead({
+    // With the database connected, the lead lives there. Otherwise keep a
+    // short, masked copy in this browser so the demo dashboard can show it.
+    if (!res.saved) saveLead({
       id: Date.now(),
       name: answers.name.split(/\s+/)[0], // demo keeps first name only
       phone: maskPhone(answers.phone), // demo keeps last 4 only
@@ -112,6 +114,11 @@ export default function Quote() {
       source: res.source,
     });
     setStatus('done');
+  }
+
+  function pickSlot(s) {
+    setSlot(s);
+    if (result?.leadId) requestSlot(result.leadId, s);
   }
 
   function reset() {
@@ -267,7 +274,7 @@ export default function Quote() {
                       key={s}
                       type="button"
                       aria-pressed={slot === s}
-                      onClick={() => setSlot(s)}
+                      onClick={() => pickSlot(s)}
                       className={`h-14 rounded border-[1.5px] px-6 font-semibold ${
                         slot === s ? 'border-brand bg-brand text-paper' : 'border-line bg-white text-ink hover:border-ink'
                       }`}
@@ -307,7 +314,7 @@ export default function Quote() {
               </div>
             </>
           ) : (
-            <div className="flex flex-col gap-4 rounded-md bg-white p-8">
+            <div className="flex flex-col gap-4 rounded-md border border-line/70 bg-white p-8">
               <div className="text-[13px] font-semibold uppercase tracking-[0.12em] text-muted">Behind the scenes · owner's view</div>
               <div className="flex items-center gap-4">
                 <span className={`rounded px-5 py-2.5 text-xl font-extrabold tracking-wider ${tierStyle[result.tier]}`}>{result.tier}</span>
@@ -326,6 +333,15 @@ export default function Quote() {
                 <p className="m-0 rounded bg-well p-4 text-[15px] leading-relaxed">
                   <strong>Note for {business.ownerName}:</strong> {result.summary}
                 </p>
+              )}
+              {result.alertPreview && (
+                <div className="rounded border border-line/70 p-4">
+                  <div className="text-[12px] font-semibold uppercase tracking-[0.12em] text-muted">
+                    {result.alertSent ? 'Alert emailed to the owner' : 'Owner alert (sent for HOT leads only)'}
+                  </div>
+                  <div className="mt-1.5 font-semibold text-brand">{result.alertPreview.subject}</div>
+                  <div className="mt-1 text-sm text-muted">No phone, email or address in the alert. Details stay in the dashboard.</div>
+                </div>
               )}
               <p className="m-0 text-sm leading-relaxed text-muted">
                 Hot is {business.tiers.hot}+, warm is {business.tiers.warm}–{business.tiers.hot - 1}. The owner sets these rules.{' '}

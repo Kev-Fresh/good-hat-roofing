@@ -6,6 +6,10 @@
 // Privacy: the AI never sees the name, phone, email, or house number. Notes are
 // scrubbed of phone numbers and emails before they leave this function, and
 // nothing the homeowner typed is written to the logs.
+//
+// With Supabase configured, the lead is saved server-side (browsers can never
+// write to the database), tied to the visitor's session, and the owner gets an
+// email alert based on the business's alert policy.
 
 import business from '../../shared/business.js';
 import {
@@ -17,7 +21,8 @@ import {
   firstName,
 } from '../../shared/scoring.js';
 import { scrubText, scrubArea } from '../../shared/privacy.js';
-import { validateLead, phoneDigits } from '../../shared/contact.js';
+import { dbReady, userFromRequest, getBusiness, insertLead, deleteExpiredLeads, shouldAlert, buildAlert, sendAlert } from '../lib/db.mjs';
+import { validateLead, phoneDigits, formatPhone } from '../../shared/contact.js';
 
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
 const MAX_BODY_BYTES = 4000; // a real lead is well under 2 KB
@@ -155,6 +160,40 @@ function fillName(reply, answers) {
   return reply.replace(/\{first_name\}/g, name || 'there').replace('Thanks, there.', 'Thanks for reaching out.');
 }
 
+function logFailure(label, err) {
+  // Log the failure type only — never the lead's contents.
+  const msg = err?.name === 'AbortError' ? 'timeout' : /^(Anthropic API|Supabase|Resend|Business)/.test(err?.message || '') ? err.message : err?.name;
+  console.error(`score-lead ${label} error:`, msg);
+}
+
+async function scoreWithAi(answers, base) {
+  const safeAnswers = { ...answers, area: scrubArea(answers.area) };
+  const rulesOnly = {
+    ...base,
+    reply: fallbackReply(base, answers, business),
+    summary: fallbackSummary(base, safeAnswers),
+    source: 'rules',
+  };
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    console.warn('score-lead: no ANTHROPIC_API_KEY set, using rules only');
+    return rulesOnly;
+  }
+  try {
+    const ai = await askClaude(answers, base, apiKey);
+    const merged = mergeAi(base, ai);
+    return {
+      ...merged,
+      reply: fillName(clean(String(ai.reply || ''), 700), answers) || fallbackReply(merged, answers, business),
+      summary: clean(String(ai.ownerNote || ''), 300) || fallbackSummary(merged, safeAnswers),
+      source: 'ai',
+    };
+  } catch (err) {
+    logFailure('AI', err);
+    return rulesOnly;
+  }
+}
+
 export default async (req) => {
   if (req.method !== 'POST') return json({ error: 'Use POST' }, 405);
   if (!allowedOrigin(req)) return json({ error: 'Forbidden' }, 403);
@@ -175,34 +214,77 @@ export default async (req) => {
   if (Object.keys(fields).length) return json({ error: 'Invalid lead', fields }, 400);
 
   const base = scoreLead(answers, business);
-  const rulesOnly = {
-    ...base,
-    reply: fallbackReply(base, answers, business),
-    summary: fallbackSummary(base, answers),
-    source: 'rules',
-  };
 
-  // Honeypot filled = a bot. Look normal, but don't spend an AI call (or, in the
-  // client-ready version, save anything).
-  if (answers.website) return json(rulesOnly);
-
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return json(rulesOnly);
-
-  try {
-    const ai = await askClaude(answers, base, apiKey);
-    const merged = mergeAi(base, ai);
-    return json({
-      ...merged,
-      reply: fillName(clean(String(ai.reply || ''), 700), answers) || fallbackReply(merged, answers, business),
-      summary: clean(String(ai.ownerNote || ''), 300) || fallbackSummary(merged, answers),
-      source: 'ai',
-    });
-  } catch (err) {
-    // Log the failure type only — never the lead's contents.
-    console.error('score-lead AI error:', err.name === 'AbortError' ? 'timeout' : err.message.startsWith('Anthropic API') ? err.message : err.name);
-    return json(rulesOnly);
+  // Honeypot filled = a bot. Look normal, but no AI call and nothing saved.
+  if (answers.website) {
+    return json({ ...base, reply: fallbackReply(base, answers, business), summary: '', source: 'rules', saved: false });
   }
+
+  // With the database connected, every lead needs a browser session
+  // (visitors get an anonymous one) so they can only ever see their own.
+  let user = null;
+  if (dbReady) {
+    user = await userFromRequest(req);
+    if (!user) return json({ error: 'Session required' }, 401);
+  }
+
+  const result = await scoreWithAi(answers, base);
+
+  let leadId = null;
+  let alert = null;
+  let alertSent = false;
+  if (dbReady) {
+    try {
+      const biz = await getBusiness();
+      leadId = await insertLead({
+        business_id: biz.id,
+        visitor_id: user.id,
+        name: answers.name,
+        phone: formatPhone(answers.phone),
+        email: answers.email,
+        area: answers.area || null,
+        job: answers.job,
+        timeline: answers.timeline,
+        insurance: answers.insurance,
+        details: answers.details || null,
+        job_label: result.jobLabel,
+        tier: result.tier,
+        points: result.points,
+        breakdown: result.breakdown,
+        estimate: result.estimate,
+        estimate_mid: Math.round(result.estimateMid || 0),
+        summary: result.summary,
+        reply: result.reply,
+        source: result.source,
+      });
+
+      alert = buildAlert({
+        firstName: firstName(answers.name),
+        jobLabel: result.jobLabel,
+        tier: result.tier,
+        points: result.points,
+        summary: result.summary,
+        businessName: business.name,
+      });
+      if (shouldAlert(biz, result.tier)) {
+        alertSent = await sendAlert(alert).catch((err) => {
+          logFailure('alert', err);
+          return false;
+        });
+      }
+      await deleteExpiredLeads(biz).catch((err) => logFailure('cleanup', err));
+    } catch (err) {
+      logFailure('save', err);
+    }
+  }
+
+  return json({
+    ...result,
+    leadId,
+    saved: Boolean(leadId),
+    alertSent,
+    alertPreview: alert ? { subject: alert.subject, lines: alert.lines } : null,
+  });
 };
 
 // Netlify: route + rate limit so strangers can't run up the API bill.

@@ -4,6 +4,7 @@ import Home from './pages/Home.jsx';
 import Quote from './pages/Quote.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Privacy from './pages/Privacy.jsx';
+import Login from './pages/Login.jsx';
 
 function ScrollToTop() {
   const { pathname, hash } = useLocation();
@@ -26,6 +27,7 @@ export default function App() {
         <Route path="/quote" element={<Quote />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/privacy" element={<Privacy />} />
+        <Route path="/login" element={<Login />} />
         <Route path="*" element={<Home />} />
       </Routes>
     </>

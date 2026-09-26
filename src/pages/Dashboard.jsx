@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { supabase, ownerMembership } from '../lib/supabase.js';
+import { maskPhone } from '../../shared/privacy.js';
 import business from '../../shared/business.js';
 import { money, firstName } from '../../shared/scoring.js';
 import { loadLeads, clearLeads } from '../lib/leads.js';
@@ -53,28 +55,107 @@ const navItems = [
 // Stagger helper: sets the CSS delay the .anim-* classes read.
 const delay = (ms) => ({ '--d': `${ms}ms` });
 
+const LEAD_COLS = 'id,created_at,name,phone,area,job_label,tier,points,estimate,estimate_mid,summary,requested_slot,status';
+
+// Database row → what the table shows. Visitors only ever get their own rows
+// back (the database enforces it); owners get everything for their business.
+function fromRow(r, owner) {
+  return {
+    id: r.id,
+    name: owner ? r.name : firstName(r.name),
+    phone: owner ? r.phone : maskPhone(r.phone),
+    job: r.job_label || 'General question',
+    area: r.area || 'Not given',
+    estimate: r.estimate,
+    estimateMid: r.estimate_mid || 0,
+    tier: r.tier,
+    summary: r.summary,
+    slot: r.requested_slot,
+    receivedAt: r.created_at,
+  };
+}
+
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [filter, setFilter] = useState('ALL');
-  const [mine, setMine] = useState(() => loadLeads());
+  // 'loading' | 'local' (no database, browser copy) | 'visitor' | 'owner'
+  const [mode, setMode] = useState(supabase ? 'loading' : 'local');
+  const [owner, setOwner] = useState(null);
+  const [mine, setMine] = useState(() => (supabase ? [] : loadLeads()));
+
+  useEffect(() => {
+    if (!supabase) return undefined;
+    let channel;
+    let cancelled = false;
+    (async () => {
+      const m = await ownerMembership().catch(() => null);
+      if (cancelled) return;
+      if (m?.businessId) {
+        const { data } = await supabase.from('leads').select(LEAD_COLS).eq('business_id', m.businessId).order('created_at', { ascending: false }).limit(200);
+        if (cancelled) return;
+        setOwner(m);
+        setMine((data || []).map((r) => fromRow(r, true)));
+        setMode('owner');
+        channel = supabase
+          .channel('leads-live')
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'leads', filter: `business_id=eq.${m.businessId}` }, (payload) =>
+            setMine((prev) => [fromRow(payload.new, true), ...prev])
+          )
+          .subscribe();
+        return;
+      }
+      const { data: s } = await supabase.auth.getSession();
+      if (s.session) {
+        const { data } = await supabase.from('leads').select(LEAD_COLS).eq('visitor_id', s.session.user.id).order('created_at', { ascending: false }).limit(20);
+        if (!cancelled) setMine((data || []).map((r) => fromRow(r, false)));
+      }
+      if (!cancelled) setMode('visitor');
+    })();
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const isOwner = mode === 'owner';
 
   const leads = useMemo(() => {
-    const yours = mine.map((l) => ({ ...l, time: timeLabel(l.receivedAt), yours: true }));
-    return [...yours, ...SAMPLE_LEADS];
-  }, [mine]);
+    const rows = mine.map((l) => ({ ...l, time: timeLabel(l.receivedAt), yours: !isOwner }));
+    return isOwner ? rows : [...rows, ...SAMPLE_LEADS];
+  }, [mine, isOwner]);
 
   const counts = useMemo(() => {
-    const c = { ...BASE };
+    if (isOwner) {
+      const weekAgo = Date.now() - 7 * 86400000;
+      const c = { total: 0, HOT: 0, WARM: 0, COLD: 0, pipeline: 0, requests: 0 };
+      mine.forEach((l) => {
+        if (new Date(l.receivedAt).getTime() < weekAgo) return;
+        c.total += 1;
+        c[l.tier] += 1;
+        c.pipeline += l.estimateMid || 0;
+        if (l.slot) c.requests += 1;
+      });
+      return c;
+    }
+    const c = { ...BASE, requests: 9 };
     mine.forEach((l) => {
       c.total += 1;
       c[l.tier] += 1;
       c.pipeline += l.estimateMid || 0;
     });
     return c;
-  }, [mine]);
+  }, [mine, isOwner]);
+
+  async function signOut() {
+    await supabase?.auth.signOut();
+    navigate('/login');
+  }
 
   const shown = filter === 'ALL' ? leads : leads.filter((l) => l.tier === filter);
   const latest = mine[0];
-  const hotOvernight = 3 + mine.filter((l) => l.tier === 'HOT').length;
+  const hotOvernight = isOwner
+    ? mine.filter((l) => l.tier === 'HOT' && Date.now() - new Date(l.receivedAt).getTime() < 86400000).length
+    : 3 + mine.filter((l) => l.tier === 'HOT').length;
   const filterIndex = FILTERS.indexOf(filter);
 
   const rules = [...business.form.job.options, ...business.form.timeline.options, ...business.form.insurance.options]
@@ -108,10 +189,24 @@ export default function Dashboard() {
         </nav>
 
         <main className="flex min-w-0 flex-1 flex-col gap-5">
-          <div className="anim-rise flex items-center gap-2 rounded-2xl bg-ink px-4 py-2.5 text-sm text-accent-soft">
-            <span className="flex-1">Owner's view of a concept project. The top rows are leads you sent from this browser.</span>
-            <Link to="/quote" className="font-semibold text-paper underline underline-offset-2 hover:text-accent">Send a test lead</Link>
-          </div>
+          {isOwner ? (
+            <div className="anim-rise flex flex-wrap items-center gap-3 rounded-2xl bg-brand px-4 py-2.5 text-sm text-white/85">
+              <span className="relative flex h-2 w-2" aria-hidden="true">
+                <span className="ping absolute inline-flex h-full w-full rounded-full bg-accent-bright" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-accent-bright" />
+              </span>
+              <span className="flex-1">Live owner view · signed in as {owner?.email}. Demo leads auto-delete after 7 days.</span>
+              <button type="button" onClick={signOut} className="font-semibold text-white underline underline-offset-2 hover:text-accent-bright">Sign out</button>
+            </div>
+          ) : (
+            <div className="anim-rise flex flex-wrap items-center gap-3 rounded-2xl bg-ink px-4 py-2.5 text-sm text-accent-soft">
+              <span className="flex-1">
+                Owner's view of a concept project. The top rows are leads you sent{mode === 'visitor' ? ', visible only to you. They auto-delete after 7 days.' : ' from this browser.'}
+              </span>
+              <Link to="/quote" className="font-semibold text-paper underline underline-offset-2 hover:text-accent-bright">Send a test lead</Link>
+              {supabase && <Link to="/login" className="font-semibold text-paper underline underline-offset-2 hover:text-accent-bright">Owner sign in</Link>}
+            </div>
+          )}
 
           <header className="anim-rise flex flex-wrap items-center gap-4" style={delay(60)}>
             <div className="flex min-w-[260px] flex-1 flex-col gap-1">
@@ -135,9 +230,13 @@ export default function Dashboard() {
           </header>
 
           <section aria-label="This week" className="grid grid-cols-2 gap-4 xl:grid-cols-4 xl:gap-5">
-            <Stat d={120} label="New leads this week" value={counts.total} chip={`+${5 + mine.length} vs last wk`} />
-            <Stat d={180} label="Avg first reply" value={42} unit="sec" />
-            <Stat d={240} label="Inspection requests" value={9} unit="4 via the assistant" />
+            <Stat d={120} label="New leads this week" value={counts.total} chip={isOwner ? null : `+${5 + mine.length} vs last wk`} />
+            {isOwner ? (
+              <Stat d={180} label="Instant replies sent" value={counts.total} unit="by the assistant" />
+            ) : (
+              <Stat d={180} label="Avg first reply" value={42} unit="sec" />
+            )}
+            <Stat d={240} label="Inspection requests" value={counts.requests} unit={isOwner ? 'waiting on you' : '4 via the assistant'} />
             <Pipeline d={300} value={counts.pipeline} />
           </section>
 
@@ -151,13 +250,15 @@ export default function Dashboard() {
                   <span className="ping absolute inline-flex h-full w-full rounded-full bg-brand" />
                   <span className="relative inline-flex h-2 w-2 rounded-full bg-brand" />
                 </span>
-                <div className="text-[13px] text-brand">{latest ? `Updated ${timeLabel(latest.receivedAt).toLowerCase()}` : 'Updated 6:14 AM'}</div>
+                <div className="text-[13px] text-brand">{latest ? `Updated ${timeLabel(latest.receivedAt).toLowerCase()}` : isOwner ? 'Waiting for leads' : 'Updated 6:14 AM'}</div>
               </div>
               <p className="anim-rise m-0 text-xl leading-snug tracking-[-0.01em] sm:text-[22px]" style={delay(560)}>
                 {latest ? (
                   <>
                     New {tierWord[latest.tier].toLowerCase()} lead from <strong>{firstName(latest.name)}</strong>. {latest.summary}
                   </>
+                ) : isOwner ? (
+                  <>No leads yet. When one comes in, it shows up here and the HOT ones land in your email.</>
                 ) : (
                   <>
                     Start with <strong>Dana on Parkside Ave</strong>. Active leak over the kitchen, and her adjuster already approved the claim. I shared the Tuesday and Thursday openings. She hasn't picked one yet.
@@ -232,7 +333,10 @@ export default function Dashboard() {
                             <span title="Masked in the demo">{l.phone}</span>
                           )}
                         </td>
-                        <td className="px-3 py-3">{l.job}</td>
+                        <td className="px-3 py-3">
+                          {l.job}
+                          {l.slot && <span className="mt-1 block text-xs font-semibold text-accent">Wants {l.slot}</span>}
+                        </td>
                         <td className="px-3 py-3 text-muted">{l.area}</td>
                         <td className="whitespace-nowrap px-3 py-3 font-medium">{l.estimate}</td>
                         <td className="whitespace-nowrap px-3 py-3 text-muted">{l.time}</td>
@@ -246,7 +350,7 @@ export default function Dashboard() {
                   </tbody>
                 </table>
               </div>
-              {mine.length > 0 && (
+              {mode === 'local' && mine.length > 0 && (
                 <button type="button" onClick={() => { clearLeads(); setMine([]); }} className="press self-start text-sm font-semibold text-brand underline underline-offset-2 hover:text-ink">
                   Clear my test leads
                 </button>
