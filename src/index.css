@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+/* Brand colors come from shared/business.js at startup (see main.jsx).
+   These are just the defaults so nothing flashes unstyled. */
+:root {
+  --gh-brand: #1B2A41;
+  --gh-accent: #A63D2F;
+  --gh-accent-bright: #E0604F;
+  --gh-accent-soft: #EEF1F5;
+  --gh-ink: #1A1F2B;
+  --gh-paper: #FFFFFF;
+}
+
+@theme inline {
+  --color-brand: var(--gh-brand);
+  --color-accent: var(--gh-accent);
+  --color-accent-soft: var(--gh-accent-soft);
+  --color-accent-bright: var(--gh-accent-bright);
+  --color-ink: var(--gh-ink);
+  --color-paper: var(--gh-paper);
+  --color-canvas: color-mix(in oklab, var(--gh-accent-soft) 85%, var(--gh-brand));
+  --color-muted: color-mix(in oklab, var(--gh-ink) 78%, var(--gh-paper));
+  --color-line: color-mix(in oklab, var(--gh-ink) 20%, var(--gh-paper));
+  --color-well: color-mix(in oklab, var(--gh-ink) 5%, var(--gh-paper));
+  --font-sans: "Libre Franklin", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Archivo", "Libre Franklin", ui-sans-serif, sans-serif;
+}
+
+html { background: var(--gh-paper); color: var(--gh-ink); }
+body { font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+:focus-visible { outline: 3px solid var(--gh-accent); outline-offset: 2px; }
+
+/* ── Micro-animations ───────────────────────────────────────── */
+@keyframes gh-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes gh-row {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes gh-pop {
+  0% { opacity: 0; transform: scale(0.85); }
+  60% { opacity: 1; transform: scale(1.06); }
+  100% { transform: scale(1); }
+}
+@keyframes gh-glow {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--gh-accent) 45%, transparent); }
+  100% { box-shadow: 0 0 0 12px transparent; }
+}
+@keyframes gh-ping {
+  0% { transform: scale(1); opacity: 0.7; }
+  80%, 100% { transform: scale(2.4); opacity: 0; }
+}
+@keyframes gh-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+.anim-rise { animation: gh-rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) backwards; animation-delay: var(--d, 0ms); }
+.anim-row { animation: gh-row 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) backwards; animation-delay: var(--d, 0ms); }
+.anim-pop { animation: gh-pop 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) backwards; animation-delay: var(--d, 0ms); }
+.anim-glow { animation: gh-glow 1.4s ease-out 0.6s 3; }
+.anim-grow { transform-origin: left; animation: gh-grow 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) both; animation-delay: var(--d, 0ms); }
+.ping { animation: gh-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite; }
+
+.lift { transition: transform 0.25s ease, box-shadow 0.25s ease; }
+.lift:hover { transform: translateY(-3px); box-shadow: 0 12px 28px rgba(31, 42, 34, 0.1); }
+.press { transition: transform 0.15s ease, background-color 0.2s ease, color 0.2s ease; }
+.press:active { transform: scale(0.96); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
